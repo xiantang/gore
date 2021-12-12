@@ -304,6 +304,20 @@ func TestSessionEval_MultipleValues(t *testing.T) {
 	assert.Equal(t, "", stderr.String())
 }
 
+func TestSessionEval_Struct(t *testing.T) {
+	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
+	s, err := NewSession(stdout, stderr)
+	s.autoImport = true
+	defer s.Clear()
+	require.NoError(t, err)
+	codes := []string{
+		"type A struct{ v int }",
+	}
+	for _, code := range codes {
+		_ = s.Eval(code)
+	}
+}
+
 func TestSessionEval_Func(t *testing.T) {
 	stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
 	s, err := NewSession(stdout, stderr)

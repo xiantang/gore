@@ -20,10 +20,9 @@ import (
 	"syscall"
 	"unicode"
 
+	"github.com/motemen/go-quickfix"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/imports"
-
-	"github.com/motemen/go-quickfix"
 )
 
 // Session ...
@@ -237,6 +236,9 @@ func (s *Session) evalStmt(in string) error {
 		}
 		if decl, ok := lastStmt.(*ast.DeclStmt); ok {
 			if decl, ok := decl.Decl.(*ast.GenDecl); ok {
+				if decl.Tok == token.TYPE {
+					return fmt.Errorf("it is struct")
+				}
 				if s := buildPrintStmtOfDecl(decl); s != nil {
 					stmts = append(stmts, s)
 				}
@@ -286,6 +288,24 @@ func buildPrintStmtOfDecl(decl *ast.GenDecl) ast.Stmt {
 		}
 	}
 	return buildPrintStmt(exprs)
+}
+
+func (s *Session) evalType(in string) error {
+	src := fmt.Sprintf("package P; %s", in)
+	f, err := parser.ParseFile(s.fset, "typ.go", src, parser.Mode(0))
+	if err != nil {
+		return err
+	}
+	if len(f.Decls) != 1 {
+		return errors.New("eval func error")
+	}
+	newDecl, ok := f.Decls[0].(*ast.GenDecl)
+	if !ok {
+		return errors.New("eval func error")
+	}
+	s.file.Decls = append(s.file.Decls, newDecl)
+
+	return nil
 }
 
 func (s *Session) evalFunc(in string) error {
@@ -383,19 +403,17 @@ func (s *Session) reset() error {
 	return nil
 }
 
-// Eval the input.
-func (s *Session) Eval(in string) error {
-	debugf("eval >>> %q", in)
-
+func (s *Session) genCodeFromInput(in string) ([]byte, error) {
 	s.clearQuickFix()
 	s.storeCode()
+	buff := new(bytes.Buffer)
 
 	if strings.HasPrefix(strings.TrimSpace(in), ":") {
 		err := s.invokeCommand(in)
 		if err != nil && err != ErrQuit {
 			fmt.Fprintf(s.stderr, "%s\n", err)
 		}
-		return err
+		return nil, err
 	}
 
 	if _, err := s.evalExpr(in); err != nil {
@@ -409,12 +427,15 @@ func (s *Session) Eval(in string) error {
 			if err != nil {
 				debugf("func :: err = %s", err)
 
-				if err := s.parseTokens(in); err != nil {
-					fmt.Fprintf(s.stderr, "%s\n", err)
-					return err
+				err := s.evalType(in)
+				if err != nil {
+					if err := s.parseTokens(in); err != nil {
+						fmt.Fprintf(s.stderr, "%s\n", err)
+						return nil, err
+					}
+					return nil, ErrContinue
 				}
 
-				return ErrContinue
 			}
 		}
 	}
@@ -423,8 +444,18 @@ func (s *Session) Eval(in string) error {
 		s.fixImports()
 	}
 	s.doQuickFix()
+	printer.Fprint(buff, s.fset, s.file)
+	return buff.Bytes(), nil
+}
 
-	err := s.Run()
+// Eval the input.
+func (s *Session) Eval(in string) error {
+	debugf("eval >>> %q", in)
+	_, err := s.genCodeFromInput(in)
+	if err != nil {
+		return err
+	}
+	err = s.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// if failed with status 2, remove the last statement
